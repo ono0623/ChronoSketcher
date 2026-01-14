@@ -1,6 +1,7 @@
 /* ===== Base ===== */
 body {
   font-family: sans-serif;
+  font-size: 10px;
   margin: 0;
   padding: 0;
   background: #ffffff;
@@ -99,7 +100,7 @@ body {
   padding: 1px 3px;
   border-radius: 3px;
   cursor: pointer;
-  font-size: 10px;
+  font-size: 9px;
   transition: background .15s ease, color .15s ease, border-color .15s ease, box-shadow .15s ease;
 }
 
