@@ -317,11 +317,25 @@ body {
 
 /* ===== toolbar 内のボタン高さを完全に統一 ===== */
 #toolbar button {
-  height: 26px;              /* 好きな高さに調整 */
+  height: 20px;              /* 好きな高さに調整 */
   line-height: 26px;         /* 文字を縦中央に */
-  padding: 0 6px;            /* 横方向だけ余白 */
+  padding: 0 2px;            /* 横方向だけ余白 */
   box-sizing: border-box;
   display: inline-flex;      /* 中央揃えを安定させる */
   align-items: center;
   justify-content: center;
+}
+
+
+#toolbar{
+  display: flex;
+  align-items: center;   /* 追加 */
+}
+
+.tool-group,
+.btn-group{
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;          /* toolbarのgapと揃えるなら */
+  height: 20px;      /* ← #toolbar button の height と同じ値にする */
 }
