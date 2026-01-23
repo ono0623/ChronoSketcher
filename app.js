@@ -170,6 +170,7 @@ function createEmptyOperationCounts() {
     // クリック履歴（タイムスタンプ付き配列）
     penClicks: [],
     lassoClicks: [],
+    moveClicks: [],  
     undoClicks: [],
     redoClicks: [],
     clearClicks: [],
@@ -183,6 +184,7 @@ function createEmptyOperationCounts() {
     // 実行履歴（タイムスタンプ付き配列）
     penExecuted: [],
     lassoExecuted: [],
+    moveExecuted: [],  
     undoExecuted: [],
     redoExecuted: [],
     clearExecuted: [],
@@ -199,6 +201,14 @@ function createEmptyOperationCounts() {
     strokesDrawn: []
   };
 }
+
+function ensureOpArray(key) {
+  if (!operationCounts) operationCounts = createEmptyOperationCounts();
+  if (!Array.isArray(operationCounts[key])) operationCounts[key] = [];
+  return operationCounts[key];
+}
+
+
 
 let operationCounts = createEmptyOperationCounts();
 
@@ -1542,9 +1552,14 @@ lassoBtn.addEventListener('click', () => {
 
 if (moveBtn) {
   moveBtn.addEventListener('click', () => {
+    operationCounts.moveClicks.push(Date.now());
+    if (currentTool !== 'move') {
+      operationCounts.moveExecuted.push(Date.now()); // ツール切替としてのExecuted
+    }
     setMode('move');
   });
 }
+
 
 undoBtn.addEventListener('click', () => {
   operationCounts.undoClicks.push(Date.now());
@@ -2044,6 +2059,9 @@ canvas.addEventListener('mouseup', (e) => {
   if (isMovingStrokes && currentTool === 'move') {
     isMovingStrokes = false;
 
+    // ★「実際に移動したか？」を判定（クリックしただけで0移動ならExecutedにしない）
+    let movedAnything = false;
+
     if (selectedStrokes.size > 0) {
       const now = Date.now();
       const abs = performance.now();
@@ -2058,11 +2076,16 @@ canvas.addEventListener('mouseup', (e) => {
         const dx = t.dx || 0;
         const dy = t.dy || 0;
 
+        // 0移動なら確定しない（＝Executedにしない、ストロークも増やさない）
+        if (dx === 0 && dy === 0) return;
+
+        movedAnything = true;
+
         // 移動後の座標を「新しいストローク」として確定（viewOffset は含めない）
         const newPoints = original.points.map(pt => ({
           x: pt.x + dx,
           y: pt.y + dy,
-          tAbs: abs          //全点同じ → 描画時間 0ms 扱い
+          tAbs: abs // 全点同じ → 描画時間 0ms 扱い
         }));
 
         if (newPoints.length < 2) return;
@@ -2076,9 +2099,9 @@ canvas.addEventListener('mouseup', (e) => {
           color: original.color,
           startTime: now,
           endTime: now,
-          duration: 0,        //0ms
+          duration: 0, // 0ms
           length,
-          speed: 0,           // 好きなら length/1 でもOK
+          speed: 0,
           active: true,
           startTimeAbs: abs,
           endTimeAbs: abs,
@@ -2099,6 +2122,13 @@ canvas.addEventListener('mouseup', (e) => {
           delete currentTransforms[original.id];
         }
       });
+
+      // ★ここで「移動が実際に確定した」＝Executed
+      if (movedAnything) {
+        operationCounts.moveExecuted.push(Date.now());
+        console.log('Move - Clicks:', operationCounts.moveClicks.length,
+                    'Executed:', operationCounts.moveExecuted.length);
+      }
 
       // 選択状態を新しいストローク側に移す（好みで）
       selectedStrokes.clear();
@@ -2225,9 +2255,7 @@ timelineCanvas.addEventListener('mouseup', (e) => {
 
 
 async function exportOperationCountsAsCSV() {
-  let csv = 'Operation,Type,Date,Time\n';
-
-  // 日時フォーマット関数（日本時間で出力）
+  // ===== ユーティリティ =====
   const formatDateTime = (ts) => {
     const d = new Date(ts);
     const yyyy = d.getFullYear();
@@ -2236,57 +2264,126 @@ async function exportOperationCountsAsCSV() {
     const hh = String(d.getHours()).padStart(2, '0');
     const min = String(d.getMinutes()).padStart(2, '0');
     const ss = String(d.getSeconds()).padStart(2, '0');
-    return {
-      date: `${yyyy}/${mm}/${dd}`,
-      time: `${hh}:${min}:${ss}`,
-    };
+    return { date: `${yyyy}/${mm}/${dd}`, time: `${hh}:${min}:${ss}` };
   };
 
-  // クリック＋実行を持つ操作の出力
-  const addTwoTypeSection = (name, clicks, executed) => {
-    const rows = [];
-    (clicks || []).forEach(ts => typeof ts === 'number' && rows.push({ op: name, type: 'Click', ts }));
-    (executed || []).forEach(ts => typeof ts === 'number' && rows.push({ op: name, type: 'Executed', ts }));
-    if (rows.length === 0) return;
-    rows.sort((a, b) => a.ts - b.ts);
-    rows.forEach(r => {
-      const t = formatDateTime(r.ts);
-      csv += `${r.op},${r.type},${t.date},${t.time}\n`;
+  const safeLen = (arr) =>
+    Array.isArray(arr) ? arr.filter(v => typeof v === 'number').length : 0;
+
+  // 操作定義：ここを増やせばサマリにもログにも反映される
+  const ops = [
+    { name: 'Pen', clickKey: 'penClicks', execKey: 'penExecuted' },
+    { name: 'Lasso', clickKey: 'lassoClicks', execKey: 'lassoExecuted' },
+
+    // ✅ 追加：Move
+    { name: 'Move', clickKey: 'moveClicks', execKey: 'moveExecuted' },
+
+    { name: 'Undo', clickKey: 'undoClicks', execKey: 'undoExecuted' },
+    { name: 'Redo', clickKey: 'redoClicks', execKey: 'redoExecuted' },
+    { name: 'ClearCanvas', clickKey: 'clearClicks', execKey: 'clearExecuted' },
+    { name: 'Snapshot', clickKey: 'saveClicks', execKey: 'saveExecuted' },
+    { name: 'Export', clickKey: 'exportClicks', execKey: 'exportExecuted' },
+    { name: 'Import', clickKey: 'importClicks', execKey: 'importExecuted' },
+
+    // あれば拾う（無ければ0扱い）
+    { name: 'Activate Selected', clickKey: 'activateSelectedClicks', execKey: 'activateSelectedExecuted' },
+    { name: 'Inactivate Selected', clickKey: 'inactivateSelectedClicks', execKey: 'inactivateSelectedExecuted' },
+
+    { name: 'Toggle Stroke List', clickKey: 'toggleStrokeListClicks', execKey: 'toggleStrokeListExecuted' },
+    { name: 'Show Inactive', clickKey: 'showInactiveClicks', execKey: 'showInactiveExecuted' },
+  ];
+
+  const singleOps = [
+    { name: 'Snapshot Switch', key: 'snapshotSwitches' },
+    { name: 'Toggle Active', key: 'toggleActiveHistory' },
+    { name: 'Stroke Drawn', key: 'strokesDrawn' },
+  ];
+
+  // ===== 1) 時間順ログ用：全イベントを集約 =====
+  const rows = [];
+
+  const pushClickExecuted = (opName, clicks, executed) => {
+    (clicks || []).forEach(ts => {
+      if (typeof ts === 'number') rows.push({ ts, op: opName, type: 'Click' });
     });
-    csv += '\n';
-  };
-
-  // 実行のみを持つ操作の出力
-  const addSingleTypeSection = (name, executed) => {
-    const rows = [];
-    (executed || []).forEach(ts => typeof ts === 'number' && rows.push({ op: name, type: 'Executed', ts }));
-    if (rows.length === 0) return;
-    rows.sort((a, b) => a.ts - b.ts);
-    rows.forEach(r => {
-      const t = formatDateTime(r.ts);
-      csv += `${r.op},${r.type},${t.date},${t.time}\n`;
+    (executed || []).forEach(ts => {
+      if (typeof ts === 'number') rows.push({ ts, op: opName, type: 'Executed' });
     });
-    csv += '\n';
   };
 
-  // ==== 出力ブロック ====
-  addTwoTypeSection('Pen', operationCounts.penClicks, operationCounts.penExecuted);
-  addTwoTypeSection('Lasso', operationCounts.lassoClicks, operationCounts.lassoExecuted);
-  addTwoTypeSection('Undo', operationCounts.undoClicks, operationCounts.undoExecuted);
-  addTwoTypeSection('Redo', operationCounts.redoClicks, operationCounts.redoExecuted);
-  addTwoTypeSection('Clear', operationCounts.clearClicks, operationCounts.clearExecuted);
-  addTwoTypeSection('Save', operationCounts.saveClicks, operationCounts.saveExecuted);
-  addTwoTypeSection('Export', operationCounts.exportClicks, operationCounts.exportExecuted);
-  addTwoTypeSection('Import', operationCounts.importClicks, operationCounts.importExecuted);
-  addTwoTypeSection('Toggle Selected', operationCounts.toggleSelectedClicks, operationCounts.toggleSelectedExecuted);
-  addTwoTypeSection('Toggle Stroke List', operationCounts.toggleStrokeListClicks, operationCounts.toggleStrokeListExecuted);
-  addTwoTypeSection('Show Inactive', operationCounts.showInactiveClicks, operationCounts.showInactiveExecuted);
+  const pushExecutedOnly = (opName, executed) => {
+    (executed || []).forEach(ts => {
+      if (typeof ts === 'number') rows.push({ ts, op: opName, type: 'Executed' });
+    });
+  };
 
-  addSingleTypeSection('Snapshot Switch', operationCounts.snapshotSwitches);
-  addSingleTypeSection('Toggle Active', operationCounts.toggleActiveHistory);
-  addSingleTypeSection('Stroke Drawn', operationCounts.strokesDrawn);
+  // ops（Click/Executed系）
+  ops.forEach(def => {
+    pushClickExecuted(
+      def.name,
+      operationCounts?.[def.clickKey],
+      operationCounts?.[def.execKey]
+    );
+  });
 
-  // 保存
+  // singleOps（Executedのみ）
+  singleOps.forEach(def => {
+    pushExecutedOnly(def.name, operationCounts?.[def.key]);
+  });
+
+  // 時刻順
+  rows.sort((a, b) => a.ts - b.ts);
+
+  // ===== 1.5) Executedのみの時系列ログ（追加） =====
+  const execRows = rows.filter(r => r.type === 'Executed');
+
+  // ===== 2) サマリ（回数表）を作る =====
+  let summaryCsv = '';
+  summaryCsv += 'Summary\n';
+  summaryCsv += 'Operation,Clicks,Executed,Total\n';
+
+  let sumClicks = 0;
+  let sumExec = 0;
+
+  ops.forEach(def => {
+    const c = safeLen(operationCounts?.[def.clickKey]);
+    const e = safeLen(operationCounts?.[def.execKey]);
+    summaryCsv += `${def.name},${c},${e},${c + e}\n`;
+    sumClicks += c;
+    sumExec += e;
+  });
+
+  // singleOps は Executed 扱いで合計に入れる（クリックは0）
+  let singleExecTotal = 0;
+  singleOps.forEach(def => {
+    const e = safeLen(operationCounts?.[def.key]);
+    summaryCsv += `${def.name},0,${e},${e}\n`;
+    singleExecTotal += e;
+  });
+
+  summaryCsv += `All (click+executed),${sumClicks},${sumExec + singleExecTotal},${sumClicks + sumExec + singleExecTotal}\n`;
+
+  // ===== 3) 本体（時間順ログ：Click/Executed混在）を作る =====
+  let logCsv = '';
+  logCsv += 'Time-ordered Log (Click + Executed)\n';
+  logCsv += 'TimestampMs,Operation,Type,Date,Time\n';
+  rows.forEach(r => {
+    const t = formatDateTime(r.ts);
+    logCsv += `${r.ts},${r.op},${r.type},${t.date},${t.time}\n`;
+  });
+
+  // ===== 3.5) Executedのみログ（追加） =====
+  let execLogCsv = '';
+  execLogCsv += 'Executed Only (Time-ordered)\n';
+  execLogCsv += 'TimestampMs,Operation,Date,Time\n';
+  execRows.forEach(r => {
+    const t = formatDateTime(r.ts);
+    execLogCsv += `${r.ts},${r.op},${t.date},${t.time}\n`;
+  });
+
+  // ===== 4) 連結して保存（サマリ→空行→混在ログ→空行→Executedのみログ） =====
+  const csv = `${summaryCsv}\n\n${logCsv}\n\n${execLogCsv}`;
+
   const bom = new Uint8Array([0xEF, 0xBB, 0xBF]);
   const blob = new Blob([bom, csv], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
@@ -2296,6 +2393,9 @@ async function exportOperationCountsAsCSV() {
   a.click();
   URL.revokeObjectURL(url);
 }
+
+
+
 
 
 
